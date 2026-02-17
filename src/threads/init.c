@@ -129,6 +129,18 @@ main (void)
 #endif
 
   printf ("Boot complete.\n");
+  printf ("Hello from Vishy!\n");
+
+  printf ("Type something! Press 'q' to shut down the OS.\n");
+  while (true) {
+      uint8_t key = input_getc();  // Wait for a raw keyboard interrupt
+      printf ("%c", key);          // Print the key to the screen
+      
+      if (key == 'q') {
+          printf ("\nShutting down...\n");
+          shutdown_power_off();    // Cut the power
+      }
+  }
   
   /* Run actions specified on kernel command line. */
   run_actions (argv);
