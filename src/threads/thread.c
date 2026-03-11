@@ -202,6 +202,10 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  /*if the new thread has a higher priority then, yield the CPU to it */
+  if(t->priority > thread_current()->priority)
+    thread_yield();
+
   return tid;
 }
 
@@ -238,7 +242,11 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  // removing following line
+  // list_push_back (&ready_list, &t->elem);
+
+  /*inserting in the ready list in descending order of priority*/
+  list_insert_ordered (&ready_list, &t->elem, cmp_priority, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -309,7 +317,10 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+    /* ADDED FOR PRIORITY SCHEDULING*/
+    list_insert_ordered (&ready_list, &cur->elem, cmp_priority, NULL);
+    //removed following FIFO scheduling
+    //list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -336,7 +347,29 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  //removing following line
+  //thread_current ()->priority = new_priority;
+
+  struct thread * cur = thread_current();
+  /* ADDING PRIORITY DONATION*/
+  /*update the base priority. If no one is currently donating to us 
+    ie our donation list is empty, then update our effective priority */
+  cur->base_priority = new_priority;
+  
+  if(list_empty (&cur->donations))
+    cur->priority=new_priority;
+
+  /*ADDING PRIORITY SCHEDULING(Premptive)*/
+  /*If the ready_list is not empty , choose the front thread ie
+  the highest priority thread as the list is already sorted*/
+
+  if(!list_empty(&ready_list)){
+    struct thread *highest_priority_thread = list_entry(list_front(&ready_list), struct thread, elem);
+  
+    /*If our new priority is lower than the waiting thread, leave the cpu*/
+    if(cur->priority<highest_priority_thread->priority)
+      thread_yield();
+  }
 }
 
 /* Returns the current thread's priority. */
@@ -459,11 +492,20 @@ init_thread (struct thread *t, const char *name, int priority)
   ASSERT (name != NULL);
 
   memset (t, 0, sizeof *t);
+
+  /*PRIORITY SCHEDULING VARIABLES */
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+
+  /* Priority Donation */
+  t->base_priority = priority;        // Initially base priority = priority
+  list_init (&t->donations);          // Initialize empty donation list
+  t->wait_on_lock = NULL;             // New thread not waiting on any lock
+  
   t->magic = THREAD_MAGIC;
+  /*-----------------*/
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -583,3 +625,21 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+
+
+
+
+
+
+/*Comparision function*/
+bool
+cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED){
+  struct thread *ta = list_entry(a, struct thread, elem);
+  struct thread *tb = list_entry(b, struct thread, elem);
+
+  return (ta->priority)>(tb->priority);
+}
+
+
+
