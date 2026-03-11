@@ -33,6 +33,7 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
    manipulating it:
@@ -69,7 +70,11 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
+      //removing following line, fifo
+      //list_push_back (&sema->waiters, &thread_current ()->elem);
+      //ADDED FOR PRIORITY SCHEDULING
+      /*Insert the thread into the semaphore's waiting list based on priority. */
+      list_insert_ordered (&sema->waiters, &thread_current ()->elem, cmp_priority, NULL);
       thread_block ();
     }
   sema->value--;
@@ -114,10 +119,28 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
+
   sema->value++;
+  if (!list_empty (&sema->waiters))
+  {
+    /*ADDING PRIORITY SCHEDULING*/
+    /*Sort the list before popping.We have tp do this because later, with 
+        priority donation, a thread's priority might change while it is 
+        already asleep in this list*/
+    list_sort(&sema->waiters,cmp_priority,NULL);
+    struct thread *unblocked_thread = list_entry(list_pop_front(&sema->waiters),struct thread,elem);
+
+    thread_unblock (unblocked_thread);
+    /*PREEMPTION:If the thread we just woke up is more important than us, yield
+      But dontr yield if we are inside a hardware interrupt */
+    if(thread_current ()-> priority <unblocked_thread->priority)
+    {
+      if(!intr_context())
+      {
+        thread_yield();
+      }
+    }
+  } 
   intr_set_level (old_level);
 }
 
@@ -254,6 +277,29 @@ struct semaphore_elem
     struct semaphore semaphore;         /* This semaphore. */
   };
 
+/*Adding comparision function for priority scheduling*/
+/* Compares two semaphore_elems by the priority of the thread waiting on them
+   to wake up the highest priority thread waiting on a condition variable. */
+static bool
+cmp_sem_priority(const struct list_elem *a, const struct list_elem *b,void *aux UNUSED)
+{
+  /*get semaphore_elems from list_elems*/
+  struct semaphore_elem *sa = list_entry(a,struct semaphore_elem, elem);
+  struct semaphore_elem *sb = list_entry(b,struct semaphore_elem, elem);
+
+  /*get thread waiting inside sa*/
+  struct list_elem *ta_elem = list_front (&sa->semaphore.waiters);
+  struct thread *ta = list_entry(ta_elem,struct thread, elem);
+
+  /*get thead waiting inside sb*/
+  struct list_elem *tb_elem = list_front (&sb->semaphore.waiters);
+  struct thread *tb = list_entry(tb_elem,struct thread, elem);
+
+  /*compare priorities*/
+  return ta->priority> tb->priority;
+}
+
+
 /* Initializes condition variable COND.  A condition variable
    allows one piece of code to signal a condition and cooperating
    code to receive the signal and act upon it. */
@@ -316,6 +362,11 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
+
+  /*ADDED FOR PRIORITY SCHEDULING*/
+  /*Sort the condition variable's waiters list using thecomparator.
+    so that the highest priority thread gets popped and woken up first. */
+  list_sort (&cond->waiters, cmp_sem_priority, NULL);
 
   if (!list_empty (&cond->waiters)) 
     sema_up (&list_entry (list_pop_front (&cond->waiters),
