@@ -643,3 +643,62 @@ cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNU
 
 
 
+
+/*DONATION FUNCTIONS*/
+bool
+cmp_donation_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  struct thread *ta = list_entry(a, struct thread, donation_elem);
+  struct thread *tb = list_entry(b, struct thread, donation_elem);
+  return ta->priority > tb->priority;
+}
+
+/*Pushes priority up the chain: if thread a is waiting for a lock heldd by thread b
+  get the priority of thread a(nested donations of max depth 8)*/
+
+void
+thread_donate_priority(struct thread *t)
+{
+  int depth = 0;
+  struct thread *cur = t;
+
+  /* get the chain of locks, and prevent infinite loop by putting limitaion on depth*/
+  while(cur->wait_on_lock !=NULL && depth < 8)
+  {
+    struct thread *holder = cur->wait_on_lock->holder;
+    if(holder == NULL)
+      break;
+
+    /*/Donate Priority*/
+
+    if(holder->priority <cur->priority)
+      holder->priority = cur->priority;
+
+    cur = holder;
+    depth++;
+  }
+} 
+
+
+/*Recalculate thread's priority based on its base_priority and donors*/
+/*Call this when thread gives up the lock and needs to give up its donor priority*/
+
+void
+thread_update_priority(struct thread *t)
+{
+  if(t == idle_thread)
+    return;
+
+    t->priority = t->base_priority;
+
+    /*if we have donors, check if the highest donor is higher than our base as declared above*/
+    if(!list_empty(&t-> donations))
+    {
+      list_sort (&t->donations,cmp_donation_priority,NULL);
+      struct thread *highest_donor = list_entry(list_front(&t->donations),struct thread,donation_elem);
+
+      if(highest_donor->priority > t->priority)
+        t->priority = highest_donor->priority;
+
+    }
+}
