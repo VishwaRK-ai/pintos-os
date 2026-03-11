@@ -148,4 +148,9 @@ int thread_get_load_avg (void);
 /*ADDED FOR PRIORITY SCHEDULING*/
 bool cmp_priority (const struct list_elem *a, const struct list_elem *b, void *aux);
 
+/*ADDED FOR PRIORITY DONATION*/
+bool cmp_donation_priority (const struct list_elem *a, const struct list_elem *b, void *aux);
+void thread_donate_priority (struct thread *t);
+void thread_update_priority (struct thread *t);
+
 #endif /* threads/thread.h */
