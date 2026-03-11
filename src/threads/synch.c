@@ -216,10 +216,27 @@ lock_init (struct lock *lock)
 void
 lock_acquire (struct lock *lock)
 {
+  //added followng 1 line
+  struct thread *cur = thread_current();
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+
+  /*ADDED FOR PRIORITY DONATION*/
+  if(lock->holder != NULL)
+  {
+    /*If lock is held by another thread, we must donate our priority to it*/
+    cur->wait_on_lock = lock;
+
+    /*Insert the thread into the holder's donattion list, sorted by priority*/
+    list_insert_ordered(&lock->holder->donations, &cur->donation_elem,cmp_donation_priority,NULL);
+
+    /*increase the priority up the chain*/
+    thread_donate_priority(cur);
+  }
+  /*--------*/
+  //Sleep until lock is free
   sema_down (&lock->semaphore);
   lock->holder = thread_current ();
 }
@@ -252,8 +269,29 @@ lock_try_acquire (struct lock *lock)
 void
 lock_release (struct lock *lock) 
 {
+  //added following 2 lines
+  struct thread *cur = thread_current();
+  struct list_elem *e;
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
+
+  /*ADDED FOR PRIORITY DONATION*/
+  /* Remove all threads waiting on this lock from our donations list */
+
+  for(e = list_begin(&cur->donations);e != list_end(&cur-> donations);)
+  {
+    struct thread *t = list_entry(e, struct thread, donation_elem);
+    struct list_elem *next = list_next(e);
+
+    if(t->wait_on_lock == lock)
+      list_remove(e);
+
+    e = next;
+  }
+  /*update back the threads priority*/
+  thread_update_priority(cur);
+  /*-------------*/
+  
 
   lock->holder = NULL;
   sema_up (&lock->semaphore);
