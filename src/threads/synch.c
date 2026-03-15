@@ -224,7 +224,7 @@ lock_acquire (struct lock *lock)
 
 
   /*ADDED FOR PRIORITY DONATION*/
-  if(lock->holder != NULL)
+  if(lock->holder != NULL && !thread_mlfqs)//added no priority donation if mlfqs is active
   {
     /*If lock is held by another thread, we must donate our priority to it*/
     cur->wait_on_lock = lock;
@@ -276,20 +276,23 @@ lock_release (struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
 
   /*ADDED FOR PRIORITY DONATION*/
-  /* Remove all threads waiting on this lock from our donations list */
-
-  for(e = list_begin(&cur->donations);e != list_end(&cur-> donations);)
+  //no priority donation if mlfqs is active
+  if(!thread_mlfqs)
   {
-    struct thread *t = list_entry(e, struct thread, donation_elem);
-    struct list_elem *next = list_next(e);
+    /* Remove all threads waiting on this lock from our donations list */
+    for(e = list_begin(&cur->donations);e != list_end(&cur-> donations);)
+    {
+      struct thread *t = list_entry(e, struct thread, donation_elem);
+      struct list_elem *next = list_next(e);
 
-    if(t->wait_on_lock == lock)
-      list_remove(e);
+      if(t->wait_on_lock == lock)
+        list_remove(e);
 
-    e = next;
+      e = next;
+    }
+    /*update back the threads priority*/
+    thread_update_priority(cur);
   }
-  /*update back the threads priority*/
-  thread_update_priority(cur);
   /*-------------*/
   
 

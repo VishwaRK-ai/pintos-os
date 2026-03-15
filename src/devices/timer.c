@@ -90,11 +90,22 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
+  if(ticks <= 0)
+    return;
   int64_t start = timer_ticks ();
-
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  //removing following while
+  // while (timer_elapsed (start) < ticks) 
+    // thread_yield ();
+
+  /*Disable interuppts to block th thread*/
+  enum intr_level old_level = intr_disable ();
+
+  struct thread * cur = thread_current ();
+  cur->wake_time = start + ticks; //set the alarm
+  thread_block (); // go to sleep
+  
+  intr_set_level (old_level); // turn on interuppts back on
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -167,12 +178,28 @@ timer_print_stats (void)
   printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
 
+
+/*adding following function to check if the thread is sleeping and if its alarm is going off*/
+static void
+wake_sleeping_threads (struct thread *t, void *aux){
+  int64_t current_tick = *(int64_t *)aux;
+
+  /*iF thread is blocked, has a alarm set, and the alarm is ringning*/
+  if(t->status == THREAD_BLOCKED && t->wake_time > 0 && t->wake_time <= current_tick)
+  {
+    t->wake_time = 0;/*turn of alarm*/
+    thread_unblock(t); /*wake threads up*/
+  }
+}
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+
+  /*adding for alarm clock*/
+  thread_foreach ( wake_sleeping_threads, &ticks);
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
