@@ -4,7 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
-
+#include "threads/fixed-point.h"//point logic for mlfqs
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -95,6 +95,12 @@ struct thread
     struct list_elem donation_elem;    //element to put this theread in another threads donation list
     struct lock *wait_on_lock;         //the lock this thread is waiting for
    /*----------------------*/
+
+   /*MLFQS Elements*/
+   int nice;         //-20 to 20 value if thread is "nice " to yield cpu for others(lowers priority)
+   int recent_cpu;   //fp number time of recent cpu usage of the thread
+   int64_t wake_time; //temp
+   /*-----------*/
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
@@ -152,5 +158,10 @@ bool cmp_priority (const struct list_elem *a, const struct list_elem *b, void *a
 bool cmp_donation_priority (const struct list_elem *a, const struct list_elem *b, void *aux);
 void thread_donate_priority (struct thread *t);
 void thread_update_priority (struct thread *t);
+
+/*MLFQS Maths*/
+void mlfqs_calculate_priority (struct thread *t);
+void mlfqs_calculate_recent_cpu (struct thread *t);
+void mlfqs_calculate_load_avg (void);
 
 #endif /* threads/thread.h */
