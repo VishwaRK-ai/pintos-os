@@ -30,6 +30,7 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+  char *fn_copy2; //created for thread name
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
@@ -39,21 +40,51 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  /*Adding following block to get the program name*/
+  fn_copy2 = palloc_get_page (0);
+  if (fn_copy2 == NULL)
+  {
+    palloc_free_page (fn_copy);
+    return TID_ERROR;
+  }
+  strlcpy (fn_copy2, file_name, PGSIZE);
+
+  char *save_ptr;
+  char *real_file_name = strtok_r (fn_copy2, " ", &save_ptr);
+  /*------------------*/
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  /*pass real_file_name instead of file_name*/
+  tid = thread_create (real_file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
 }
 
+//adding following helper
+static void setup_argument_stack (char **argv, int argc, void **esp);
+
 /* A thread function that loads a user process and starts it
    running. */
+
 static void
 start_process (void *file_name_)
 {
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
+
+  /*Added following: Tokenize the string into array*/
+  char* argv[128];
+  int argc = 0;
+  char* token, *save_ptr;
+
+  /*delimitize wrt " "*/
+  for(token = strtok_r(file_name, " ", &save_ptr); token != NULL; token = strtok_r(NULL, " ", &save_ptr))
+  {
+    argv[argc] = token;
+    argc++;
+  }
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -62,10 +93,18 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
-  /* If load failed, quit. */
-  palloc_free_page (file_name);
   if (!success) 
     thread_exit ();
+  else
+  {
+    setup_argument_stack(argv, argc, &if_.esp);//if success
+
+    /* If load failed, quit. */
+    palloc_free_page (file_name);
+  }
+
+  /*X ray the memory stack temporarily before implementing syscalls.*/
+  hex_dump((uintptr_t) if_.esp, if_.esp, PHYS_BASE - (uintptr_t) if_.esp, true);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -464,3 +503,50 @@ install_page (void *upage, void *kpage, bool writable)
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
+
+
+/*defining helper for start_process*/
+/*Push the arguments into user stack*/
+static void
+setup_argument_stack (char **argv, int argc, void **esp) 
+{
+  char *arg_addresses[128]; // Addresses of the strings we put
+
+  /*Push the string in reverse order*/
+  int i;
+  for(i = argc - 1; i >= 0; i--)
+  {
+    size_t len = strlen (argv[i]) + 1;    //+1 for null '\0' character
+    *esp -= len;                          //Move stack pointer down
+    memcpy(*esp, argv[i], len);           //;;Copy the string onto stack
+    arg_addresses[i] = *esp;                 //store the address of the string in stack
+  }
+
+  *esp = (void*) ((uint32_t) *esp & 0xfffffffc); //Align to 4 bytes(round down to mulitple of 4)
+
+  /*Push a NULL pointer as */
+  *esp -= sizeof(char *);
+  *((char ** )* esp) = NULL;
+
+  /*PUsh the address pointers of the strings weve stored*/
+  for(i = argc - 1; i >= 0; i-- )
+  {
+  *esp -= sizeof (char *);
+  *((char ** ) * esp) = arg_addresses[i];
+  }
+
+  /*Push argv address ie, argv[0] address*/
+  char ** argv_addr = *esp;
+  *esp -= sizeof (char **);
+  *((char ***) * esp) = argv_addr;
+
+  /*push argc , total count of arguments */
+  *esp -= sizeof(int);
+  *((int* ) *esp) = argc;
+
+  /*Push Null return address(compulsory for C)*/
+  *esp -= sizeof(void *);
+  *((void **) *esp) = NULL;
+}
+
+
