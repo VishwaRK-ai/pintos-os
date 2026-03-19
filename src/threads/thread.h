@@ -105,6 +105,10 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+    /*Proj2 2 elements*/
+    struct file *fd_table[128];//array to hold up to 128 open files
+    int next_fd;//next available file descriptor
+    /*-----------*/
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */

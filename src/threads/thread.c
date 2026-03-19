@@ -614,6 +614,15 @@ init_thread (struct thread *t, const char *name, int priority)
 
   /*------------*/
 
+  /*Initialize File Descriptor table*/
+  int i;
+  for(int i =0;i<128;i++)
+  {
+    t->fd_table[i] = NULL;
+  }
+  t->next_fd = 2;
+  /*----------------*/
+
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
