@@ -19,6 +19,9 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+#include "threads/malloc.h"
+extern struct lock filesys_lock;
+
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
@@ -53,11 +56,41 @@ process_execute (const char *file_name)
   char *real_file_name = strtok_r (fn_copy2, " ", &save_ptr);
   /*------------------*/
 
+  struct child_status *child = malloc(sizeof(struct child_status));
+  if(child == NULL)
+  {
+    palloc_free_page(fn_copy);
+    palloc_free_page(fn_copy2);
+    return TID_ERROR;
+  }
+
   /* Create a new thread to execute FILE_NAME. */
   /*pass real_file_name instead of file_name*/
   tid = thread_create (real_file_name, PRI_DEFAULT, start_process, fn_copy);
+  palloc_free_page(fn_copy2);
+
   if (tid == TID_ERROR)
+  {
+    free(child);
     palloc_free_page (fn_copy); 
+    return TID_ERROR;
+  }
+
+  /*Create Ghost child receipt before sleeping*/
+  child->tid = tid;
+  child->is_alive = true;
+  child->exit_status = -1;
+  sema_init(&child->wait_sema, 0);
+  list_push_back(&thread_current()->child_list, &child->elem_child);
+
+  /*Load the child*/
+  sema_down(&thread_current() -> load_sema);
+
+  /*Ensure child loaded executable properly*/
+  if(!thread_current() -> load_success){
+    return TID_ERROR;
+  }
+
   return tid;
 }
 
@@ -93,13 +126,23 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
 
   //temp debugging step
-  printf("Attempting to load thread %s: \n", argv[0]);
+  // printf("Attempting to load thread %s: \n", argv[0]);
 
   success = load (argv[0], &if_.eip, &if_.esp);
 
+  /*Inform parent if the child succeded*/
+  struct thread * parent = thread_current() -> parent;
+  if(parent != NULL)
+  {
+    parent->load_success = success;
+    sema_up(&parent->load_sema);
+  }
+
+  // thread_current ()->load_success = success;
+
   if (!success) 
   {
-    printf("%s: Thread Load failed\n",thread_current() ->name);
+    // printf("%s: Thread Load failed\n",thread_current() ->name);
     palloc_free_page(file_name);
     thread_exit();
   }
@@ -136,13 +179,45 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  /*Temoporary addition force the kernel to wait to give time for user progs
-    to get time to trigger syscalla*/
-    while(1)
+  // /*Temoporary addition force the kernel to wait to give time for user progs
+  //   to get time to trigger syscalla*/
+  //   while(1)
+  //   {
+  //     thread_yield();//yield thread so the user program can run
+  //   }
+
+
+  struct thread * curr = thread_current();
+  struct list_elem *e;
+  struct child_status *child = NULL;
+
+  /*Search list for receipts*/
+
+  for(e = list_begin(&curr->child_list); e!= list_end(&curr->child_list);e = list_next(e))
+  {
+    struct child_status *c = list_entry(e, struct child_status, elem_child);
+    if(c->tid == child_tid)
     {
-      thread_yield();//yield thread so the user program can run
-    }
-  return -1;
+      child = c;
+      break;
+    } 
+  }
+  /*if not the parent's child or it it already waited on it, ret -1*/
+  if(child == NULL)
+  {
+    return -1;
+  }
+  /*Sleep until child dies*/
+  if(child->is_alive)
+  {
+    sema_down(&child->wait_sema);
+  }
+
+  /*Child is dead, read the receipt, free it and return status*/
+  int status = child->exit_status;
+  list_remove(&child->elem_child);
+  free(child);
+  return status;
 }
 
 /* Free the current process's resources. */
@@ -152,6 +227,54 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
+  if(cur->executable != NULL)
+    printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+  
+  /*allow writes to be executable again*/
+  if(cur->executable != NULL)
+  {
+    lock_acquire(&filesys_lock);
+    file_allow_write(cur->executable);
+    file_close(cur->executable);
+    lock_release(&filesys_lock);
+  }
+
+
+  /*close all open files to prevent confilts and memory leaks*/
+  int i;
+  for(i = 2; i < 128; i++)
+  {
+    if(cur->fd_table[i] != NULL){
+      file_close(cur->fd_table[i]);
+      cur->fd_table[i] = NULL;
+    }
+  }
+
+  /*find and update the receipt of child in the parent before this dies*/
+  if(cur->parent != NULL)
+  {
+    struct list_elem * e;
+    for(e = list_begin(&cur->parent->child_list); e!= list_end(&cur->parent->child_list);e = list_next(e))
+    {
+      struct child_status *c = list_entry(e, struct child_status, elem_child);
+      if(c->tid == cur->tid)
+      {
+        c->is_alive = false;
+        c->exit_status = cur->exit_status;  //copy final status of receipt
+        sema_up(&c->wait_sema);             /*wake upt the parent*/
+        break;
+      }
+    }
+  }
+
+  /*clear out child*/
+  struct list_elem *e;
+  while(!list_empty(&cur->child_list))
+  {
+    e = list_pop_front(&cur->child_list);
+    struct child_status *c = list_entry(e, struct child_status, elem_child);
+    free(c);
+  }
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -382,16 +505,18 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) {
-    printf("DEBUG: pagedir_create failed\n");
+    // printf("DEBUG: pagedir_create failed\n");
     goto done;
   }
   process_activate ();
 
   /* Open executable file. */
+  lock_acquire(&filesys_lock);
   file = filesys_open (file_name);
+  lock_release(&filesys_lock);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      // printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
 
@@ -404,7 +529,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", file_name);
+      // printf ("load: %s: error loading executable\n", file_name);
       goto done; 
     }
 
@@ -415,13 +540,13 @@ load (const char *file_name, void (**eip) (void), void **esp)
       struct Elf32_Phdr phdr;
 
       if (file_ofs < 0 || file_ofs > file_length (file)) {
-        printf("DEBUG: file_ofs invalid\n");
+        // printf("DEBUG: file_ofs invalid\n");
         goto done;
       }
       file_seek (file, file_ofs);
 
       if (file_read (file, &phdr, sizeof phdr) != sizeof phdr) {
-        printf("DEBUG: file_read phdr failed\n");
+        // printf("DEBUG: file_read phdr failed\n");
         goto done;
       }
       file_ofs += sizeof phdr;
@@ -437,7 +562,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
         case PT_DYNAMIC:
         case PT_INTERP:
         case PT_SHLIB:
-          printf("DEBUG: unsupported segment type\n");
+          // printf("DEBUG: unsupported segment type\n");
           goto done;
         case PT_LOAD:
           if (validate_segment (&phdr, file)) 
@@ -460,12 +585,12 @@ load (const char *file_name, void (**eip) (void), void **esp)
                 }
               if (!load_segment (file, file_page, (void *) mem_page,
                                  read_bytes, zero_bytes, writable)) {
-                printf("DEBUG: load_segment failed\n");
+                // printf("DEBUG: load_segment failed\n");
                 goto done;
               }
             }
           else {
-            printf("DEBUG: validate_segment failed\n");
+            // printf("DEBUG: validate_segment failed\n");
             goto done;
           }
           break;
@@ -474,7 +599,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   /* Set up stack. */
   if (!setup_stack (esp)) {
-    printf("DEBUG: setup_stack failed\n");
+    // printf("DEBUG: setup_stack failed\n");
     goto done;
   }
 
@@ -485,7 +610,19 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  if(success)
+  {
+    t->executable = file;
+    lock_acquire(&filesys_lock);
+    file_deny_write (file);
+    lock_release(&filesys_lock);
+  }
+  else
+  {
+    lock_acquire(&filesys_lock);
+    file_close(file);
+    lock_release(&filesys_lock);
+  }
   return success;
 }
 

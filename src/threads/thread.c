@@ -236,6 +236,8 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  t->parent = thread_current();//tell the child who its parent is
+
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
   kf->eip = NULL;
@@ -616,12 +618,20 @@ init_thread (struct thread *t, const char *name, int priority)
 
   /*Initialize File Descriptor table*/
   int i;
-  for(int i =0;i<128;i++)
+  for(i =0;i<128;i++)
   {
     t->fd_table[i] = NULL;
   }
   t->next_fd = 2;
   /*----------------*/
+  /*Initialize child list and semaphores*/
+  list_init(&t->child_list);
+  t->parent = NULL;
+  sema_init(&t->load_sema,0);
+  t->load_success = false;
+  t->exit_status = -1;
+  t->executable = NULL;
+  /*----------*/
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

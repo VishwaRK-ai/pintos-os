@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/fixed-point.h"//point logic for mlfqs
+#include "threads/synch.h"//added
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -80,6 +81,16 @@ typedef int tid_t;
    only because they are mutually exclusive: only a thread in the
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
+
+
+struct child_status
+{
+   tid_t tid;                    //thread id of child process
+   int exit_status;              //exit status of child(0: success ; -1: error)
+   bool is_alive;                //is child alive or not
+   struct semaphore wait_sema;    //semaphores for parent to sleep on waiting
+   struct list_elem elem_child;        //list elem to attach it to parent
+};
 struct thread
   {
     /* Owned by thread.c. */
@@ -106,8 +117,16 @@ struct thread
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
     /*Proj2 2 elements*/
-    struct file *fd_table[128];//array to hold up to 128 open files
-    int next_fd;//next available file descriptor
+    //file handling
+    struct file *fd_table[128];        //array to hold up to 128 open files
+    int next_fd;                       //next available file descriptor
+
+    struct list child_list;             //list of children
+    struct thread *parent;             //pointer to parent thread
+    struct semaphore load_sema;          //semaphore for parent to wait on child to load
+    bool load_success;                   //success status of loading
+    int exit_status;  
+    struct file *executable;              //currently running executable
     /*-----------*/
 
 #ifdef USERPROG

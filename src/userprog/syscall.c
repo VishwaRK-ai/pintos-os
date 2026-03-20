@@ -8,6 +8,7 @@
 #include "userprog/pagedir.h"
 #include "threads/vaddr.h"
 #include <syscall-nr.h>
+#include "userprog/process.h"
 
 //New headers for file handling and management
 #include "filesys/filesys.h"
@@ -37,13 +38,35 @@ check_valid_ptr(const void * vaddr)
     If it is unmapped memory*/
     if(vaddr == NULL || !is_user_vaddr(vaddr) || pagedir_get_page(thread_current () ->pagedir, vaddr) == NULL )
     {
-      printf("%s:Thread killed due to its invalidity\n",thread_current ()->name);
-      printf("Pointer Address: %p\n",vaddr);
+      // printf("%s: exit(-1)\n",thread_current ()->name);
+      thread_current()->exit_status = -1;
       thread_exit(); //exit thread if pointer is wrong
 
     }
 }
+static void
+check_valid_buffer(const void * buffer, unsigned size)
+{
+  unsigned i;
+  char* ptr =(char *)buffer;
 
+  for(i =0;i<size;i++){
+    check_valid_ptr((const void *)ptr);
+    ptr++;
+  }
+}
+
+static void
+check_valid_string(const void * str)
+{
+  char *ptr = (char *)str;
+  check_valid_ptr((const void *)ptr);
+  while (*ptr != '\0')
+  {
+    ptr++;
+    check_valid_ptr((const void *)ptr);
+  }
+}
 
 
 /*ADD ALL SYSCALLS INSIDE THIS*/
@@ -51,34 +74,24 @@ static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
   //check if esp is valid
-  check_valid_ptr(f->esp);
+  check_valid_buffer(f->esp,4);
   /**/
   //get syscall number(the first 4 bytes of sp)
   int syscall_number = *(int *)(f->esp);
-  printf("Syscall requested, syscall numer: %d\n",syscall_number);
+  // printf("Syscall requested, syscall numer: %d\n",syscall_number);
   struct thread *t = thread_current();
 
   switch(syscall_number)
   {
-    case SYS_EXIT:
-    {
-      /*Sys_exit required 1 arg: the exit status code, it is in the next 4 bytes after the syscall number*/
-      check_valid_ptr(f->esp + 4);
-      int exit_status = *(int *)(f->esp + 4);
-      /*Current pintos exit format*/
-      printf("%s: exit(%d)\n", thread_current()->name, exit_status);
-      thread_exit();
-      break;
-    }
-
     case SYS_WRITE:
     {
+      check_valid_buffer(f->esp+4, 12);
       /*takes 3 arguments:(int fd, void* buffer, unsigned size)*/
       int fd = *((int *)f->esp + 1);
       const void *buffer = (const void *)*((uint32_t *)f->esp+2);
       unsigned size = *((unsigned *)f->esp +3);
       //validate buffer pointer
-      check_valid_ptr(buffer);
+      check_valid_buffer(buffer, size);
 
       if (fd == 1) {
         /*fd 1 is Console Output (STDOUT)*/
@@ -101,10 +114,11 @@ syscall_handler (struct intr_frame *f UNUSED)
     
     case SYS_CREATE:
     {
+      check_valid_buffer(f->esp+4, 8);
       const char* file = (const char *)*((uint32_t *)f->esp + 1);
       unsigned size = *((unsigned *)f->esp +2);
       //validate file pointer
-      check_valid_ptr(file);
+      check_valid_string(file);
 
       lock_acquire(&filesys_lock);
       f->eax = filesys_create(file, size);
@@ -115,9 +129,10 @@ syscall_handler (struct intr_frame *f UNUSED)
     
     case SYS_REMOVE:
     {
+      check_valid_buffer(f->esp+4, 4);
       const char* file = (const char *)*((uint32_t *)f->esp + 1);
       //validate file pointer
-      check_valid_ptr(file);
+      check_valid_string(file);
 
       lock_acquire(&filesys_lock);
       f->eax = filesys_remove(file);
@@ -127,9 +142,10 @@ syscall_handler (struct intr_frame *f UNUSED)
 
     case SYS_OPEN:
     {
+      check_valid_buffer(f->esp+4, 4);
       const char* file = (const char *)*((uint32_t *)f->esp + 1);
       //validate file pointer
-      check_valid_ptr(file);
+      check_valid_string(file);
       lock_acquire(&filesys_lock);
 
       struct file* opened_file = filesys_open(file);
@@ -152,16 +168,17 @@ syscall_handler (struct intr_frame *f UNUSED)
 
     case SYS_CLOSE:
     {
+      check_valid_buffer(f->esp+4, 4);
       int fd = *((int *)f->esp + 1);
       //validate fd pointer(needs to be in limits and is properly opened)
       if(fd<2 || fd>= 128)
       {
-        printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
+        // printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
         f->eax = -1;
       }
       else if(t->fd_table[fd] == NULL)
       {
-        printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
+        // printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
         f->eax = -1;
       }
       else
@@ -177,16 +194,17 @@ syscall_handler (struct intr_frame *f UNUSED)
 
     case SYS_FILESIZE:
     {
+      check_valid_buffer(f->esp+4, 4);
       int fd = *((int *)f->esp + 1);
       //validate fd pointer(needs to be in limits and is properly opened)
       if(fd<2 || fd>= 128)
       {
-        printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
+        // printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
         f->eax = -1;
       }
       else if(t->fd_table[fd] == NULL)
       {
-        printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
+        // printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
         f->eax = -1;
       }
       else
@@ -201,20 +219,21 @@ syscall_handler (struct intr_frame *f UNUSED)
 
     case SYS_READ:
     {
+      check_valid_buffer(f->esp+4, 12);
       int fd= *((int *)f->esp + 1);
       const void *buffer = (const void *)*((uint32_t *)f->esp + 2);
       unsigned size = *((unsigned *)f->esp+3);
       //validate buffer pointer
-      check_valid_ptr(buffer);
+      check_valid_buffer(buffer, size);
 
       if(fd<2 || fd>= 128)
       {
-        printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
+        // printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
         f->eax = -1;
       }
       else if(t->fd_table[fd] == NULL)
       {
-        printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
+        // printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
         f->eax = -1;
       }
       else if(fd == 0 )
@@ -240,18 +259,19 @@ syscall_handler (struct intr_frame *f UNUSED)
 
     case SYS_SEEK:
     {
+      check_valid_buffer(f->esp+4, 8);
       int fd = *((int *)f->esp +1);
       unsigned pos = *((unsigned * )f->esp + 2);
 
 
       if(fd<2 || fd>= 128)
       {
-        printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
+        // printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
         f->eax = -1;
       }
       else if(t->fd_table[fd] == NULL)
       {
-        printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
+        // printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
         f->eax = -1;
       }
       else
@@ -267,16 +287,17 @@ syscall_handler (struct intr_frame *f UNUSED)
 
     case SYS_TELL:
     {
+      check_valid_buffer(f->esp+4, 4);
       int fd = *((int *)f->esp +1);
 
       if(fd<2 || fd>= 128)
       {
-        printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
+        // printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
         f->eax = -1;
       }
       else if(t->fd_table[fd] == NULL)
       {
-        printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
+        // printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
         f->eax = -1;
       }
       else
@@ -289,6 +310,35 @@ syscall_handler (struct intr_frame *f UNUSED)
       break;
     }
 
+    case SYS_EXIT:
+    {
+      /*Sys_exit required 1 arg: the exit status code, it is in the next 4 bytes after the syscall number*/
+      check_valid_ptr(f->esp+4);
+      int exit_status = *(int *)(f->esp + 4);
+      t->exit_status = exit_status;           //save it for receipt
+      /*Current pintos exit format*/
+      // printf("%s: exit(%d)\n",t->name , exit_status);
+      thread_exit();
+      break;
+    }
+
+    case SYS_EXEC:
+    {
+      check_valid_buffer(f->esp+4, 4);
+      const char *cmd_line = (const char *)*((uint32_t *)f->esp+1);
+      check_valid_string(cmd_line);
+      f->eax = process_execute(cmd_line);
+      break;
+    }
+
+    case SYS_WAIT:
+    {
+      check_valid_buffer(f->esp+4, 4);
+      tid_t pid = *((tid_t *)f->esp +1);
+      f->eax = process_wait(pid);
+      break;
+    }
+  
     default:
     {
       printf("The required syscall ,%d is not implemented",syscall_number);
