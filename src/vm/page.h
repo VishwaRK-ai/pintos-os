@@ -43,4 +43,9 @@ bool spt_insert_zero (struct hash *spt, void *upage);
 struct page_entry *spt_lookup (struct hash *spt, void *upage);
 void spt_destroy (struct hash *spt);
 
+bool handle_mm_fault (struct page_entry *p);
+bool spt_set_swap (struct hash *spt, void *upage, size_t swap_index);
+bool spt_grow_stack (struct hash *spt, void *fault_addr);
+
+void spt_unmap (struct hash *spt, uint32_t *pagedir, void *upage, struct file *file, off_t offset, size_t bytes);
 #endif  /*vm/page.h*/

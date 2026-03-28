@@ -6,6 +6,10 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+#include "vm/page.h"
+#include "threads/vaddr.h"  /* For is_kernel_vaddr */
+#include "vm/page.h"         /* For spt_lookup and handle_mm_fault */
+#include "userprog/gdt.h"    /* For SEL_UPL */
 /* Number of page faults processed. */
 static long long page_fault_cnt;
 
@@ -109,6 +113,13 @@ kill (struct intr_frame *f)
     }
 }
 
+static void terminate_process (void)
+{
+   // printf("%s: exit(-1)\n", thread_current ()->name);
+   thread_current()->exit_status = -1;
+   thread_exit();
+}
+
 /* Page fault handler.  This is a skeleton that must be filled in
    to implement virtual memory.  Some solutions to project 2 may
    also require modifying this code.
@@ -152,11 +163,43 @@ page_fault (struct intr_frame *f)
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-  kill (f);
+
+
+   if(fault_addr == NULL || !is_user_vaddr(fault_addr))
+      terminate_process();
+
+   if(!not_present)
+      terminate_process();
+
+   if(fault_addr == NULL || is_kernel_vaddr(fault_addr))
+      terminate_process();
+
+   /*Check if page is in the spt*/
+   struct thread *t = thread_current();
+   struct page_entry *p = spt_lookup(&t->spt, pg_round_down(fault_addr));
+
+   if(p != NULL)
+   {
+      /*Found the page in the spt, now load the page into physical frame*/
+      if(handle_mm_fault(p))
+         return;//loaded, return to execution
+   }
+   else
+   {
+      /*Page not int SPT, check if its stack growth*/
+      void *esp = user ? f->esp : t->saved_esp;
+      
+      /*Is the fault close to stack ptr (esp -32) or is it below the 8mb limit*/
+      if(fault_addr >= (esp-32) && fault_addr < PHYS_BASE && fault_addr >= (void *)((uint8_t *)PHYS_BASE - (8 *1024 *1024)))
+      {
+         /*Valid stack growth, allocate new page for stack*/
+         if(spt_grow_stack(&t->spt, fault_addr))
+            return;//ok , resume execution
+      }
+   }
+
+   /*If we reach here, it's an invalid page fault*/
+   terminate_process();
+
 }
 
