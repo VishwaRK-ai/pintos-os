@@ -17,6 +17,8 @@
 #include "devices/shutdown.h"
 #include "devices/input.h"
 
+#include "vm/page.h"
+#include "threads/malloc.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -36,12 +38,38 @@ check_valid_ptr(const void * vaddr)
   /*If it is NUll or,
     if it is above PHYS_BASE, ie trying to access Kernel Memory or,
     If it is unmapped memory*/
-    if(vaddr == NULL || !is_user_vaddr(vaddr) || pagedir_get_page(thread_current () ->pagedir, vaddr) == NULL )
+    if(vaddr == NULL || !is_user_vaddr(vaddr))
     {
       // printf("%s: exit(-1)\n",thread_current ()->name);
       thread_current()->exit_status = -1;
       thread_exit(); //exit thread if pointer is wrong
 
+    }
+
+    struct thread *t = thread_current ();
+
+    /*check if already mapped to physical frame*/
+    if(pagedir_get_page(t->pagedir, vaddr) == NULL)
+    {
+      struct page_entry *p = spt_lookup(&t->spt, pg_round_down(vaddr));
+
+      if(p!= NULL)
+      {
+        /*if page not loaded, load it*/
+        if(!p->is_loaded)
+        {
+          if(!handle_mm_fault(p))
+          {
+            t->exit_status = -1;
+            thread_exit();
+          }
+        }
+      }
+      else
+      {
+        t->exit_status = -1;
+        thread_exit ();
+      }
     }
 }
 static void
@@ -69,10 +97,95 @@ check_valid_string(const void * str)
 }
 
 
+
+int
+sys_mmap (int fd, void *addr)
+{
+  /*validate add:page aligned, non zero, in user space*/
+  if (addr == NULL || pg_ofs(addr) != 0 || !is_user_vaddr(addr)) return -1;
+  if (fd == 0 || fd ==1) return -1;
+
+
+  struct thread *t = thread_current ();
+
+  if(fd <2 || fd >= 128 || t->fd_table[fd] == NULL)
+  {
+    return -1;
+  }
+  //get the file
+  struct file *f = t->fd_table[fd];
+  if(f == NULL) return -1;
+
+  /*reopen file so it has indep offset*/
+  struct file *reopened_file = file_reopen(f);
+  if(reopened_file == NULL) return -1;
+
+  size_t length = file_length (reopened_file);
+  if(length == 0) return -1;
+
+  /*check overlaps in spt*/
+
+  for(size_t offset = 0; offset <length; offset +=PGSIZE)
+  {
+    if(spt_lookup (&t->spt, addr + offset) != NULL)
+    {
+      file_close (reopened_file);
+      return -1;
+    }
+  }
+
+  /*Map the pages into spt , lazily*/
+  for(size_t offset =0; offset < length; offset += PGSIZE)
+  {
+    size_t read_bytes = (offset +PGSIZE <length)?PGSIZE :length -offset;
+    size_t zero_bytes =PGSIZE - read_bytes;
+    spt_insert_file (&t->spt, addr+offset, reopened_file, offset,read_bytes, zero_bytes, true);
+  }
+  /*track map in the thread*/
+  struct mmap_entry *mapping = malloc (sizeof *mapping);
+  mapping->mapid = t->next_mapid++;
+  mapping->file = reopened_file;
+  mapping->upage = addr;
+  mapping->size = length;
+  list_push_back (&t->mmap_list, &mapping->elem);
+
+  return mapping->mapid;
+}
+
+void
+sys_munmap (int mapid)
+{
+  struct thread *t = thread_current ();
+  struct list_elem *e;
+
+  for (e = list_begin (&t->mmap_list); e != list_end (&t->mmap_list); e = list_next (e)) {
+        struct mmap_entry *mapping = list_entry (e, struct mmap_entry, elem);
+        
+        if (mapping->mapid == mapid) {
+            /* Unmap all pages associated with this file */
+            for (size_t offset = 0; offset <mapping->size; offset += PGSIZE) {
+                size_t bytes = (offset + PGSIZE <mapping->size) ? PGSIZE : mapping->size - offset;
+                spt_unmap (&t->spt, t->pagedir, mapping->upage + offset, mapping->file, offset, bytes);
+            }
+            bool held = lock_held_by_current_thread(&filesys_lock);
+            if(!held)
+              lock_acquire(&filesys_lock);
+            file_close (mapping->file);
+            if(!held)
+              lock_release(&filesys_lock);
+            
+            list_remove (&mapping->elem);
+            free (mapping);
+            return;
+        }
+    }
+}
+
 /*ADD ALL SYSCALLS INSIDE THIS*/
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
+  thread_current()->saved_esp = f->esp;//save user stack ptr for stack growth checks
   //check if esp is valid
   check_valid_buffer(f->esp,4);
   /**/
@@ -336,6 +449,22 @@ syscall_handler (struct intr_frame *f UNUSED)
       check_valid_buffer(f->esp+4, 4);
       tid_t pid = *((tid_t *)f->esp +1);
       f->eax = process_wait(pid);
+      break;
+    }
+
+    case SYS_MMAP:
+    {
+      check_valid_buffer(f->esp +4, 8);
+      int fd = *((int*)f->esp +1);
+      void *addr = (void *)(*((uint32_t *)f->esp +2));
+      f->eax = sys_mmap(fd,addr);
+      break;
+    }
+    case SYS_MUNMAP:
+    {
+      check_valid_buffer(f->esp+4 ,4);
+      int mapid = *((int *)f->esp +1);
+      sys_munmap(mapid);
       break;
     }
   

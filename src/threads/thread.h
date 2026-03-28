@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "threads/fixed-point.h"//point logic for mlfqs
 #include "threads/synch.h"//added
+#include <hash.h>//for hashing
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -129,6 +130,12 @@ struct thread
     struct file *executable;              //currently running executable
     /*-----------*/
 
+    /*Virutal Memory elements*/
+    struct hash spt;
+    void *saved_esp; // saved user stack pointer for pagefaults
+    size_t stack_size; // current stack size
+    struct list mmap_list;      /*list of memory mapped files */
+    int next_mapid;             /*ID for the next mapped file */
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
