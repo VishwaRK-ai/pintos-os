@@ -7,12 +7,14 @@
 #include "filesys/free-map.h"
 #include "filesys/inode.h"
 #include "filesys/directory.h"
+#include "filesys/cache.h"
+#include "threads/synch.h"
 
 /* Partition that contains the file system. */
 struct block *fs_device;
-
+struct lock dir_lock;
 static void do_format (void);
-
+struct lock filesys_write_lock;
 /* Initializes the file system module.
    If FORMAT is true, reformats the file system. */
 void
@@ -22,9 +24,12 @@ filesys_init (bool format)
   if (fs_device == NULL)
     PANIC ("No file system device found, can't initialize file system.");
 
+
+  cache_init ();
+  lock_init (&dir_lock);
   inode_init ();
   free_map_init ();
-
+  lock_init(&filesys_write_lock);
   if (format) 
     do_format ();
 
@@ -36,7 +41,9 @@ filesys_init (bool format)
 void
 filesys_done (void) 
 {
+  /* flush all pending writes to disk before shutting down */
   free_map_close ();
+  cache_flush ();
 }
 
 /* Creates a file named NAME with the given INITIAL_SIZE.
@@ -47,13 +54,21 @@ bool
 filesys_create (const char *name, off_t initial_size) 
 {
   block_sector_t inode_sector = 0;
-  struct dir *dir = dir_open_root ();
-  bool success = (dir != NULL
+  char basename[NAME_MAX + 1];
+
+  /* Resolve the path to get the target directory and the final filename */
+  struct dir *dir = dir_resolve_path (name, basename);
+  bool success = false;
+
+  lock_acquire (&dir_lock);
+  success = (dir != NULL
                   && free_map_allocate (1, &inode_sector)
-                  && inode_create (inode_sector, initial_size)
+                  && inode_create (inode_sector, initial_size,false)
                   && dir_add (dir, name, inode_sector));
   if (!success && inode_sector != 0) 
     free_map_release (inode_sector, 1);
+
+  lock_release (&dir_lock);
   dir_close (dir);
 
   return success;
@@ -67,13 +82,30 @@ filesys_create (const char *name, off_t initial_size)
 struct file *
 filesys_open (const char *name)
 {
-  struct dir *dir = dir_open_root ();
+  if (name == NULL || strlen (name) == 0) return NULL;
+
+  char basename[NAME_MAX + 1];
+  struct dir *dir = dir_resolve_path (name, basename);
   struct inode *inode = NULL;
 
   if (dir != NULL)
-    dir_lookup (dir, name, &inode);
-  dir_close (dir);
+    {
+      if (strcmp (basename, ".") == 0)
+        {
+          /* They just want to open the directory itself */
+          inode = dir_get_inode (dir);
+          inode_reopen (inode);
+        }
+      else
+        {
+          /* Look up the final file/folder inside the resolved directory */
+          lock_acquire (&dir_lock);
+          dir_lookup (dir, basename, &inode);
+          lock_release (&dir_lock);
+        }
+    }
 
+  dir_close (dir);
   return file_open (inode);
 }
 
@@ -82,12 +114,20 @@ filesys_open (const char *name)
    Fails if no file named NAME exists,
    or if an internal memory allocation fails. */
 bool
-filesys_remove (const char *name) 
+filesys_remove (const char *name)
 {
-  struct dir *dir = dir_open_root ();
-  bool success = dir != NULL && dir_remove (dir, name);
-  dir_close (dir); 
+  char basename[NAME_MAX + 1];
+  struct dir *dir = dir_resolve_path (name, basename);
+  bool success = false;
 
+  lock_acquire (&dir_lock);
+  if (dir != NULL)
+    {
+      success = dir_remove (dir, basename);
+    }
+  lock_release (&dir_lock);
+
+  dir_close (dir);
   return success;
 }
 
