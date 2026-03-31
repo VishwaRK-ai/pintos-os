@@ -6,6 +6,7 @@
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
 #include "threads/malloc.h"
+#include "threads/thread.h"
 
 /* A directory. */
 struct dir 
@@ -27,7 +28,7 @@ struct dir_entry
 bool
 dir_create (block_sector_t sector, size_t entry_cnt)
 {
-  return inode_create (sector, entry_cnt * sizeof (struct dir_entry));
+  return inode_create (sector, entry_cnt * sizeof (struct dir_entry),true);
 }
 
 /* Opens and returns the directory for the given INODE, of which
@@ -48,6 +49,92 @@ dir_open (struct inode *inode)
       free (dir);
       return NULL; 
     }
+}
+
+
+/* Extracts a file name part from *SRCP into PART, and updates *SRCP so that the
+   next call will return the next file name part. Returns 1 if successful, 0 at
+   end of string, -1 for a too-long file name part. */
+static int
+get_next_part (char part[NAME_MAX + 1], const char **srcp)
+{
+  const char *src = *srcp;
+  char *dst = part;
+
+  /* Skip leading slashes.  If it's all slashes, we're done. */
+  while (*src == '/')
+    src++;
+  if (*src == '\0')
+    return 0;
+
+  /* Copy up to NAME_MAX character from SRC to DST.  Add null terminator. */
+  while (*src != '/' && *src != '\0')
+    {
+      if (dst < part + NAME_MAX)
+        *dst++ = *src;
+      else
+        return -1;
+      src++;
+    }
+  *dst = '\0';
+
+  /* Advance source pointer. */
+  *srcp = src;
+  return 1;
+}
+
+/* Resolves a path to the directory containing it, and puts the base
+   file/folder name into 'basename'. For example: "/a/b/c" -> returns dir 'b'
+   and basename "c". */
+struct dir *
+dir_resolve_path (const char *path, char *basename)
+{
+  struct dir *curr_dir;
+  if (path[0] == '/' || thread_current ()->cwd == NULL)
+    {
+      curr_dir = dir_open_root ();
+    }
+  else
+    {
+      curr_dir = dir_reopen (thread_current ()->cwd);
+    }
+
+  if (curr_dir == NULL) return NULL;
+
+  char part[NAME_MAX + 1];
+  char next_part[NAME_MAX + 1];
+  const char *src = path;
+  struct inode *next_inode = NULL;
+
+  /* Grab the first token */
+  if (get_next_part (part, &src) <= 0)
+    {
+      /* The path was just "/" or empty. */
+      strlcpy (basename, ".", NAME_MAX + 1);
+      return curr_dir;
+    }
+
+  /* Look ahead to see if there is another token after this one */
+  while (get_next_part (next_part, &src) > 0)
+    {
+      /* 'part' is a directory we need to traverse into. */
+      if (!dir_lookup (curr_dir, part, &next_inode))
+        {
+          dir_close (curr_dir);
+          return NULL;
+        }
+
+      dir_close (curr_dir);
+      curr_dir = dir_open (next_inode);
+      if (curr_dir == NULL) return NULL;
+
+      /* Shift our tokens over */
+      strlcpy (part, next_part, NAME_MAX + 1);
+    }
+
+  /* 'part' is the final target base name */
+  strlcpy (basename, part, NAME_MAX + 1);
+  return curr_dir;
 }
 
 /* Opens the root directory and returns a directory for it.
@@ -235,3 +322,23 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
     }
   return false;
 }
+
+
+
+/*set the current position in DIR to POS*/
+void
+dir_seek (struct dir *dir, off_t pos) 
+{
+  dir->pos = pos;
+}
+
+/*ret the current position in DIR*/
+off_t
+dir_tell (const struct dir *dir) 
+{
+  return dir->pos;
+}
+
+
+
+

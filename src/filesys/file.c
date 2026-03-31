@@ -3,13 +3,15 @@
 #include <stdarg.h>
 #include "filesys/inode.h"
 #include "threads/malloc.h"
-
+#include "threads/synch.h"
+#include "filesys/filesys.h"
 /* An open file. */
 struct file 
   {
     struct inode *inode;        /* File's inode. */
     off_t pos;                  /* Current position. */
     bool deny_write;            /* Has file_deny_write() been called? */
+    struct lock pos_lock;
   };
 
 /* Opens a file for the given INODE, of which it takes ownership,
@@ -24,6 +26,7 @@ file_open (struct inode *inode)
       file->inode = inode;
       file->pos = 0;
       file->deny_write = false;
+      lock_init(&file->pos_lock);
       return file;
     }
   else
@@ -69,8 +72,13 @@ file_get_inode (struct file *file)
 off_t
 file_read (struct file *file, void *buffer, off_t size) 
 {
-  off_t bytes_read = inode_read_at (file->inode, buffer, size, file->pos);
+  off_t bytes_read = 0;
+  if (file == NULL) return 0;
+
+  lock_acquire(&file->pos_lock);
+  bytes_read = inode_read_at (file->inode, buffer, size, file->pos);
   file->pos += bytes_read;
+  lock_release(&file->pos_lock);
   return bytes_read;
 }
 
@@ -95,8 +103,15 @@ file_read_at (struct file *file, void *buffer, off_t size, off_t file_ofs)
 off_t
 file_write (struct file *file, const void *buffer, off_t size) 
 {
-  off_t bytes_written = inode_write_at (file->inode, buffer, size, file->pos);
+  off_t bytes_written = 0;
+  if (file == NULL) return 0;
+
+  lock_acquire(&filesys_write_lock);
+  lock_acquire(&file->pos_lock);
+  bytes_written = inode_write_at (file->inode, buffer, size, file->pos);
   file->pos += bytes_written;
+  lock_release(&file->pos_lock);
+  lock_release(&filesys_write_lock);
   return bytes_written;
 }
 
