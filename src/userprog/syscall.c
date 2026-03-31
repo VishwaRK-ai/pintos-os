@@ -10,19 +10,36 @@
 #include <syscall-nr.h>
 #include "userprog/process.h"
 
-//New headers for file handling and management
+//new headers for file handling and management
+#include <string.h>
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "threads/synch.h"
 #include "devices/shutdown.h"
 #include "devices/input.h"
+#include "filesys/free-map.h"
 
 #include "vm/page.h"
 #include "threads/malloc.h"
 
+#include "filesys/directory.h"
+#include "filesys/filesys.h"
+#include "filesys/inode.h"
+
+void sys_exit (int status);
 static void syscall_handler (struct intr_frame *);
 
 struct lock filesys_lock;
+
+/*hlper to safely retrieve a file from the current threads fd_table*/
+static struct file *
+get_file_by_fd (int fd)
+{
+  if (fd < 2 || fd >= 128) 
+    return NULL;
+    
+  return thread_current ()->fd_table[fd];
+}
 
 void
 syscall_init (void) 
@@ -48,6 +65,11 @@ check_valid_ptr(const void * vaddr)
 
     struct thread *t = thread_current ();
 
+    if(t->pagedir == NULL)
+    {
+      t->exit_status = -1;
+      thread_exit();
+    }
     /*check if already mapped to physical frame*/
     if(pagedir_get_page(t->pagedir, vaddr) == NULL)
     {
@@ -167,18 +189,27 @@ sys_munmap (int mapid)
                 size_t bytes = (offset + PGSIZE <mapping->size) ? PGSIZE : mapping->size - offset;
                 spt_unmap (&t->spt, t->pagedir, mapping->upage + offset, mapping->file, offset, bytes);
             }
-            bool held = lock_held_by_current_thread(&filesys_lock);
-            if(!held)
-              lock_acquire(&filesys_lock);
+            // bool held = lock_held_by_current_thread(&filesys_lock);
+            // if(!held)
+              //lock_acquire(&filesys_lock);
             file_close (mapping->file);
-            if(!held)
-              lock_release(&filesys_lock);
+            // if(!held)
+              //lock_release(&filesys_lock);
             
             list_remove (&mapping->elem);
             free (mapping);
             return;
         }
     }
+}
+
+
+void
+sys_exit (int status)
+{
+  struct thread *t = thread_current ();
+  t->exit_status = status;
+  thread_exit ();
 }
 
 /*ADD ALL SYSCALLS INSIDE THIS*/
@@ -214,9 +245,9 @@ syscall_handler (struct intr_frame *f UNUSED)
       else if(fd >= 2 && fd < 128 && t->fd_table[fd] != NULL)
       {
         /*writing to file*/
-        lock_acquire(&filesys_lock);
+        //lock_acquire(&filesys_lock);
         f->eax = file_write(t->fd_table[fd], buffer, size);
-        lock_release(&filesys_lock);
+        //lock_release(&filesys_lock);
       }
       else
       {
@@ -259,8 +290,8 @@ syscall_handler (struct intr_frame *f UNUSED)
       const char* file = (const char *)*((uint32_t *)f->esp + 1);
       //validate file pointer
       check_valid_string(file);
-      lock_acquire(&filesys_lock);
 
+      lock_acquire(&filesys_lock);
       struct file* opened_file = filesys_open(file);
       lock_release(&filesys_lock);
       
@@ -323,9 +354,9 @@ syscall_handler (struct intr_frame *f UNUSED)
       else
       {
         //valid fd
-        lock_acquire(&filesys_lock);
+        //lock_acquire(&filesys_lock);
         f->eax = file_length(t->fd_table[fd]);
-        lock_release(&filesys_lock);
+        //lock_release(&filesys_lock);
       }
       break;
     }
@@ -363,9 +394,9 @@ syscall_handler (struct intr_frame *f UNUSED)
       else
       {
         /*Reading from file*/
-        lock_acquire(&filesys_lock);
+        //lock_acquire(&filesys_lock);
         f->eax = file_read(t->fd_table[fd], (void*)buffer, size);
-        lock_release(&filesys_lock);
+        //lock_release(&filesys_lock);
       }
       break;
     }
@@ -390,9 +421,9 @@ syscall_handler (struct intr_frame *f UNUSED)
       else
       {
         //valid fd
-        lock_acquire(&filesys_lock);
+        //lock_acquire(&filesys_lock);
         file_seek (t->fd_table[fd], pos);
-        lock_release(&filesys_lock);
+        //lock_release(&filesys_lock);
       }
       break;
 
@@ -416,9 +447,9 @@ syscall_handler (struct intr_frame *f UNUSED)
       else
       {
         //valid fd
-        lock_acquire(&filesys_lock);
+        //lock_acquire(&filesys_lock);
         f->eax = file_tell(t->fd_table[fd]);//taking only one arg
-        lock_release(&filesys_lock);
+        //lock_release(&filesys_lock);
       }
       break;
     }
@@ -428,10 +459,9 @@ syscall_handler (struct intr_frame *f UNUSED)
       /*Sys_exit required 1 arg: the exit status code, it is in the next 4 bytes after the syscall number*/
       check_valid_ptr(f->esp+4);
       int exit_status = *(int *)(f->esp + 4);
-      t->exit_status = exit_status;           //save it for receipt
+      sys_exit (exit_status);          //save it for receipt
       /*Current pintos exit format*/
       // printf("%s: exit(%d)\n",t->name , exit_status);
-      thread_exit();
       break;
     }
 
@@ -467,6 +497,148 @@ syscall_handler (struct intr_frame *f UNUSED)
       sys_munmap(mapid);
       break;
     }
+
+#ifdef FILESYS
+
+    case SYS_CHDIR:
+    {
+        const char *dir = (const char *)*((uint32_t *)f->esp + 1);
+        if (dir == NULL || !is_user_vaddr (dir)) 
+          {
+            sys_exit (-1);
+          }
+        
+        char basename[NAME_MAX + 1];
+        struct dir *target_dir = dir_resolve_path (dir, basename);
+        
+        if (target_dir == NULL) 
+          {
+            f->eax = false;
+            break;
+          }
+
+        /* If the path was exactly "/", just go to root */
+        if (strcmp (basename, ".") == 0)
+          {
+            if (thread_current ()->cwd != NULL)
+              dir_close (thread_current ()->cwd);
+            thread_current ()->cwd = target_dir;
+            f->eax = true;
+            break;
+          }
+
+        /* Look up the final directory name to enter */
+        struct inode *inode = NULL;
+        if (dir_lookup (target_dir, basename, &inode))
+          {
+            if (inode_is_dir (inode))
+              {
+                if (thread_current ()->cwd != NULL)
+                  dir_close (thread_current ()->cwd);
+                thread_current ()->cwd = dir_open (inode);
+                f->eax = true;
+              }
+            else
+              {
+                /* It was a regular file, not a directory */
+                inode_close (inode);
+                f->eax = false;
+              }
+          }
+        else
+          {
+            f->eax = false;
+          }
+          
+        dir_close (target_dir);
+        break;
+      }
+
+    case SYS_MKDIR:
+      {
+        const char *dir = (const char *)*((uint32_t *)f->esp + 1);
+        if (dir == NULL || !is_user_vaddr (dir)) 
+          {
+            sys_exit (-1);
+          }
+          
+        char basename[NAME_MAX + 1];
+        struct dir *target_dir = dir_resolve_path (dir, basename);
+        
+        if (target_dir == NULL || strcmp (basename, ".") == 0)
+          {
+            f->eax = false;
+            if (target_dir != NULL) dir_close (target_dir);
+            break;
+          }
+
+        block_sector_t sector = 0;
+        bool success = (free_map_allocate (1, &sector)
+                        && dir_create (sector, 16)
+                        && dir_add (target_dir, basename, sector));
+                        
+        if (!success && sector != 0) 
+          free_map_release (sector, 1);
+          
+        f->eax = success;
+        dir_close (target_dir);
+        break;
+      }
+
+
+      case SYS_READDIR:
+      {
+        int fd = *((int *)f->esp + 1);
+        char *name = (char *)*((uint32_t *)f->esp + 2);
+        check_valid_buffer(name, NAME_MAX+1); // validate the buffer
+
+        struct file *f_obj = get_file_by_fd (fd); 
+        if (f_obj == NULL) { f->eax = false; break; }
+
+        struct inode *inode = file_get_inode (f_obj);
+        if (!inode_is_dir (inode)) { f->eax = false; break; }
+
+        //lock_acquire(&filesys_lock); // Protect the directory read
+        struct dir *dir = dir_open (inode_reopen (inode));
+        dir_seek (dir, file_tell (f_obj));
+        bool success = dir_readdir (dir, name);
+        file_seek (f_obj, dir_tell (dir));
+        dir_close (dir);
+        //lock_release(&filesys_lock);
+
+        f->eax = success;
+        break;
+      }
+
+    case SYS_ISDIR:
+    {
+      int fd = *((int *)f->esp + 1);
+      struct file *f_obj = get_file_by_fd (fd); 
+      if (f_obj == NULL) { f->eax = false; break; }
+          
+      //lock_acquire(&filesys_lock);
+      f->eax = inode_is_dir (file_get_inode (f_obj));
+      //lock_release(&filesys_lock);
+      break;
+    }
+
+    case SYS_INUMBER:
+    {
+      int fd = *((int *)f->esp + 1);
+      struct file *f_obj = get_file_by_fd (fd); 
+       if (f_obj == NULL)
+        {
+         f->eax = -1;
+          break;
+        }
+          
+        /* Get the inode, then get the sector number (inumber) */
+      f->eax = inode_get_inumber (file_get_inode (f_obj));
+      break;
+    }
+
+    #endif
+
   
     default:
     {
