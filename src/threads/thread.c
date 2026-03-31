@@ -15,6 +15,9 @@
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
+#ifdef FILESYS
+#include "filesys/directory.h"
+#endif
 
 #include "threads/fixed-point.h"
 #include "devices/timer.h"
@@ -253,6 +256,13 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+  #ifdef FILESYS
+    if (thread_current ()->cwd != NULL)
+      {
+        t->cwd = dir_reopen (thread_current ()->cwd);
+      }
+  #endif
+
   /* Add to run queue. */
   thread_unblock (t);
 
@@ -345,9 +355,19 @@ thread_exit (void)
 {
   ASSERT (!intr_context ());
 
+#ifdef FILESYS
+  /* Close the thread's working directory to prevent memory leaks */
+  if (thread_current ()->cwd != NULL)
+    {
+      dir_close (thread_current ()->cwd);
+    }
+#endif
+
 #ifdef USERPROG
   process_exit ();
 #endif
+
+
 
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
@@ -581,6 +601,10 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->magic = THREAD_MAGIC;
   t->wake_time = 0;
+
+  #ifdef FILESYS
+  t->cwd = NULL;
+  #endif
 
   /* Priority Donation Initialization */
   list_init (&t->donations);          // Initialize empty donation list
