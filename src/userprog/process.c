@@ -241,7 +241,9 @@ process_exit (void)
 
 
   if(cur->executable != NULL)
-    printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+  {
+    // printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+  }
   
   /*allow writes to be executable again*/
   if(cur->executable != NULL)
