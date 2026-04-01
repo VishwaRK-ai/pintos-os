@@ -25,6 +25,7 @@
 #include "filesys/directory.h"
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
+#include "devices/serial.h"
 
 void sys_exit (int status);
 static void syscall_handler (struct intr_frame *);
@@ -238,7 +239,7 @@ syscall_handler (struct intr_frame *f UNUSED)
       check_valid_buffer(buffer, size);
 
       if (fd == 1) {
-        /*fd 1 is Console Output (STDOUT)*/
+        
         putbuf(buffer, size); 
         f->eax = size;      
       }
@@ -370,17 +371,7 @@ syscall_handler (struct intr_frame *f UNUSED)
       //validate buffer pointer
       check_valid_buffer(buffer, size);
 
-      if(fd<2 || fd>= 128)
-      {
-        // printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
-        f->eax = -1;
-      }
-      else if(t->fd_table[fd] == NULL)
-      {
-        // printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
-        f->eax = -1;
-      }
-      else if(fd == 0 )
+      if(fd == 0 )
       {
         /*read from keyboard (fd == 0 for STDIN)*/
         unsigned i ;
@@ -390,6 +381,16 @@ syscall_handler (struct intr_frame *f UNUSED)
           buffer_ptr[i] = input_getc();//save into array
         }
         f->eax = size;
+      }
+      else if(fd<2 || fd>= 128)
+      {
+        // printf("%s, thread killed due to invalid range.\n", thread_current ()-> name);
+        f->eax = -1;
+      }
+      else if(t->fd_table[fd] == NULL)
+      {
+        // printf("%s, thread killed due to invalid fd.\n", thread_current ()-> name);
+        f->eax = -1;
       }
       else
       {

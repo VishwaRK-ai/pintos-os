@@ -135,7 +135,7 @@ main (void)
   swap_init ();
 
   printf ("Boot complete.\n");
-  printf ("Hello from Vishy!\n");
+  printf ("Hello from Vishy's OS\n");
 
   // printf ("Type something! Press 'q' to shut down the OS.\n");
   // while (true) {
@@ -206,7 +206,6 @@ paging_init (void)
      of the Page Directory". */
   asm volatile ("movl %0, %%cr3" : : "r" (vtop (init_page_dir)));
 }
-
 /* Breaks the kernel command line into words and returns them as
    an argv-like array. */
 static char **
@@ -228,6 +227,18 @@ read_command_line (void)
       argv[i] = p;
       p += strnlen (p, end - p) + 1;
     }
+    
+  /* --- WEBOS OVERRIDE --- */
+  /* If the bootloader didn't pass any arguments, force it to run the shell! */
+  if (argc == 0) 
+    {
+      argv[0] = "-q";
+      argv[1] = "run";
+      argv[2] = "shell";
+      argc = 3;
+    }
+  /* ---------------------- */
+
   argv[argc] = NULL;
 
   /* Print kernel command line. */
