@@ -605,6 +605,7 @@ init_thread (struct thread *t, const char *name, int priority)
   #ifdef FILESYS
   t->cwd = NULL;
   #endif
+  t->next_fd = 2;
 
   /* Priority Donation Initialization */
   list_init (&t->donations);          // Initialize empty donation list

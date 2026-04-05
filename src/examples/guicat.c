@@ -10,7 +10,7 @@ int main(int argc, char *argv[]) {
     // start the teact tag with the filename and a pipe symbol '|'
     printf("[READ]%s|", argv[1]); 
     
-    char buffer[1024];
+    char buffer[4096];
     int bytes;
     while ((bytes = read(fd, buffer, sizeof(buffer) - 1)) > 0) {
         buffer[bytes] = '\0';

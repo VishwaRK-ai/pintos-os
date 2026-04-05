@@ -41,6 +41,7 @@
 
 #include "vm/frame.h"
 #include "vm/swap.h"
+#include "filesys/directory.h"
 /* Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
 
@@ -128,11 +129,15 @@ main (void)
   ide_init ();
   locate_block_devices ();
   filesys_init (format_filesys);
+
+  thread_current()->cwd = dir_open_root();
 #endif
 
+#ifdef VM
     //trying to init vm after the disks are awake
   frame_init ();
   swap_init ();
+#endif
 
   printf ("Boot complete.\n");
   printf ("Hello from Vishy's OS\n");

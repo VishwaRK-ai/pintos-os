@@ -298,6 +298,7 @@ syscall_handler (struct intr_frame *f UNUSED)
       
       if(opened_file == NULL)
       {
+        printf("DEBUG: SYS_OPEN failed to open -> '%s'\n", file); 
         f->eax = -1; //File couldnt be opened
       }
       else
@@ -555,7 +556,7 @@ syscall_handler (struct intr_frame *f UNUSED)
         break;
       }
 
-    case SYS_MKDIR:
+   case SYS_MKDIR:
       {
         const char *dir = (const char *)*((uint32_t *)f->esp + 1);
         if (dir == NULL || !is_user_vaddr (dir)) 
@@ -574,24 +575,47 @@ syscall_handler (struct intr_frame *f UNUSED)
           }
 
         block_sector_t sector = 0;
-        bool success = (free_map_allocate (1, &sector)
-                        && dir_create (sector, 16)
-                        && dir_add (target_dir, basename, sector));
-                        
-        if (!success && sector != 0) 
-          free_map_release (sector, 1);
+        bool success = false;
+
+        /*allocate a free sector for the new directory */
+        if (free_map_allocate (1, &sector)) 
+          {
+            /*format that sector as a directory */
+            if (dir_create (sector, 16)) 
+              {
+                /*open the new directory to inject the hidden files */
+                struct dir *new_dir = dir_open (inode_open (sector));
+                if (new_dir != NULL) 
+                  {
+                    /*add '.' (Points to itself) */
+                    dir_add (new_dir, ".", sector);
+                    
+                    /*add '..' (Points to the parent) */
+                    block_sector_t parent_sector = inode_get_inumber (dir_get_inode (target_dir));
+                    dir_add (new_dir, "..", parent_sector);
+                    
+                    dir_close (new_dir);
+                    
+                    /*link the new directory to the parent directory */
+                    success = dir_add (target_dir, basename, sector);
+                  }
+              }
+            
+            /* uf anything failed along the way, release the sector to prevent memory leaks */
+            if (!success) 
+              free_map_release (sector, 1);
+          }
           
         f->eax = success;
         dir_close (target_dir);
         break;
       }
 
-
       case SYS_READDIR:
       {
         int fd = *((int *)f->esp + 1);
         char *name = (char *)*((uint32_t *)f->esp + 2);
-        check_valid_buffer(name, NAME_MAX+1); // validate the buffer
+        check_valid_buffer(name, NAME_MAX+1); 
 
         struct file *f_obj = get_file_by_fd (fd); 
         if (f_obj == NULL) { f->eax = false; break; }
@@ -599,13 +623,15 @@ syscall_handler (struct intr_frame *f UNUSED)
         struct inode *inode = file_get_inode (f_obj);
         if (!inode_is_dir (inode)) { f->eax = false; break; }
 
-        //lock_acquire(&filesys_lock); // Protect the directory read
         struct dir *dir = dir_open (inode_reopen (inode));
+        if (dir == NULL) { f->eax = false; break; }
+
+        /* THE FIX: Use your helper functions instead of accessing dir->pos directly! */
         dir_seek (dir, file_tell (f_obj));
         bool success = dir_readdir (dir, name);
         file_seek (f_obj, dir_tell (dir));
+        
         dir_close (dir);
-        //lock_release(&filesys_lock);
 
         f->eax = success;
         break;
