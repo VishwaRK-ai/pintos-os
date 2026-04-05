@@ -12,12 +12,12 @@ main (void)
   printf ("Shell starting...\n");
   for (;;) 
     {
-      char command[80];
+      char command[4096];
 
       /* Read command. */
-      printf ("--");
+      printf ("--> ");
       read_line (command, sizeof command);
-      
+
       /* Execute command. */
       if (!strcmp (command, "exit"))
         break;
@@ -32,14 +32,36 @@ main (void)
         }
       else
         {
-          pid_t pid = exec (command);
-          if (pid != PID_ERROR){
-            wait(pid);
-            // printf ("\"%s\": exit code %d\n", command, wait (pid));
+          bool background = false;
+          int len = strlen (command);
+          int i = len - 1;
+          while (i >= 0 && command[i] == ' ') i--;
+          if (i >= 0 && command[i] == '&') 
+            {
+              background = true;
+              command[i] = '\0'; /* Remove '&' */
+            }
 
-          }
-          else
+          /* 1. Try running it exactly as typed */
+          pid_t pid = exec (command);
+          
+          /* 2. THE FIX: If it failed, try running it from the root directory! */
+          if (pid == PID_ERROR) 
+            {
+              char root_command[4098];
+              /* Prepend a slash so it searches the root directory */
+              snprintf(root_command, sizeof root_command, "/%s", command);
+              pid = exec(root_command);
+            }
+
+          /* 3. Wait for it to finish, or print the error */
+          if (pid != PID_ERROR) {
+            if (!background) {
+              wait (pid);
+            }
+          } else {
             printf ("exec failed\n");
+          }
         }
     }
 
@@ -47,10 +69,6 @@ main (void)
   return EXIT_SUCCESS;
 }
 
-/* Reads a line of input from the user into LINE, which has room
-   for SIZE bytes.  Handles backspace and Ctrl+U in the ways
-   expected by Unix users.  On return, LINE will always be
-   null-terminated and will not end in a new-line character. */
 static void
 read_line (char line[], size_t size) 
 {
@@ -71,13 +89,12 @@ read_line (char line[], size_t size)
           backspace (&pos, line);
           break;
 
-        case ('U' - 'A') + 1:       /* Ctrl+U. */
+        case ('U' - 'A') + 1:
           while (backspace (&pos, line))
             continue;
           break;
 
         default:
-          /* Add character to line. */
           if (pos < line + size - 1) 
             {
               putchar (c);
@@ -88,16 +105,11 @@ read_line (char line[], size_t size)
     }
 }
 
-/* If *POS is past the beginning of LINE, backs up one character
-   position.  Returns true if successful, false if nothing was
-   done. */
 static bool
 backspace (char **pos, char line[]) 
 {
   if (*pos > line)
     {
-      /* Back up cursor, overwrite character, back up
-         again. */
       printf ("\b \b");
       (*pos)--;
       return true;

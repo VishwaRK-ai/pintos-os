@@ -9,12 +9,14 @@
 #include "filesys/directory.h"
 #include "filesys/cache.h"
 #include "threads/synch.h"
+#include "threads/thread.h"
 
 /* Partition that contains the file system. */
 struct block *fs_device;
 struct lock dir_lock;
 static void do_format (void);
 struct lock filesys_write_lock;
+struct dir *dir_resolve_path (const char *path, char *basename);
 /* Initializes the file system module.
    If FORMAT is true, reformats the file system. */
 void
@@ -74,6 +76,63 @@ filesys_create (const char *name, off_t initial_size)
   return success;
 }
 
+
+struct dir *
+dir_resolve_path (const char *path, char *basename)
+{
+  if (path == NULL || strlen(path) == 0) return NULL;
+
+  struct dir *dir;
+  if (path[0] == '/') dir = dir_open_root ();
+  else if (thread_current()->cwd == NULL) dir = dir_open_root ();
+  else dir = dir_reopen (thread_current()->cwd);
+
+  char path_copy[256];
+  strlcpy (path_copy, path, sizeof path_copy);
+
+  char *save_ptr, *token = strtok_r (path_copy, "/", &save_ptr);
+  if (token == NULL) {
+    basename[0] = '\0';
+    return dir;
+  }
+
+  char *next_token = strtok_r (NULL, "/", &save_ptr);
+  while (next_token != NULL) {
+    struct inode *inode = NULL;
+    
+    if (strcmp(token, ".") == 0) {
+        /* Stay in the same directory */
+        inode = inode_reopen (dir_get_inode (dir));
+    } else if (strcmp(token, "..") == 0) {
+        /* OUT OF THE BOX: If we are at the root (Sector 1), the parent is the root! */
+        if (inode_get_inumber (dir_get_inode (dir)) == 1) 
+            inode = inode_reopen (dir_get_inode (dir));
+        else
+            dir_lookup (dir, "..", &inode);
+    } else {
+        if (!dir_lookup (dir, token, &inode)) {
+            dir_close (dir);
+            return NULL;
+        }
+    }
+      
+    if (!inode_is_dir (inode)) {
+        dir_close (dir);
+        inode_close(inode);
+        return NULL;
+    }
+      
+    dir_close (dir);
+    dir = dir_open (inode);
+    token = next_token;
+    next_token = strtok_r (NULL, "/", &save_ptr);
+  }
+
+  strlcpy (basename, token, NAME_MAX + 1);
+  return dir;
+}
+
+
 /* Opens the file with the given NAME.
    Returns the new file if successful or a null pointer
    otherwise.
@@ -90,25 +149,28 @@ filesys_open (const char *name)
 
   if (dir != NULL)
     {
-      if (strcmp (basename, ".") == 0)
+      if (strcmp (basename, ".") == 0 || strlen(basename) == 0)
         {
-          /* They just want to open the directory itself */
-          inode = dir_get_inode (dir);
-          inode_reopen (inode);
+          inode = inode_reopen (dir_get_inode (dir));
+        }
+      else if (strcmp (basename, "..") == 0)
+        {
+          /* OUT OF THE BOX: Handle '..' at the end of a path */
+          if (inode_get_inumber (dir_get_inode (dir)) == 1)
+            inode = inode_reopen (dir_get_inode (dir));
+          else
+            dir_lookup (dir, basename, &inode);
         }
       else
         {
-          /* Look up the final file/folder inside the resolved directory */
-          lock_acquire (&dir_lock);
           dir_lookup (dir, basename, &inode);
-          lock_release (&dir_lock);
         }
     }
 
   dir_close (dir);
+  if (inode == NULL) return NULL;
   return file_open (inode);
 }
-
 /* Deletes the file named NAME.
    Returns true if successful, false on failure.
    Fails if no file named NAME exists,
@@ -139,6 +201,14 @@ do_format (void)
   free_map_create ();
   if (!dir_create (ROOT_DIR_SECTOR, 16))
     PANIC ("root directory creation failed");
+    
+  /*-----------*/
+  struct dir *root = dir_open_root ();
+  dir_add (root, ".", ROOT_DIR_SECTOR);
+  dir_add (root, "..", ROOT_DIR_SECTOR);
+  dir_close (root);
+  /* ------------- */
+  
   free_map_close ();
   printf ("done.\n");
 }

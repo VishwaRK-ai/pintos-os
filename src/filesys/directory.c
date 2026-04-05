@@ -23,12 +23,14 @@ struct dir_entry
     bool in_use;                        /* In use or free? */
   };
 
+
+
 /* Creates a directory with space for ENTRY_CNT entries in the
    given SECTOR.  Returns true if successful, false on failure. */
 bool
 dir_create (block_sector_t sector, size_t entry_cnt)
 {
-  return inode_create (sector, entry_cnt * sizeof (struct dir_entry),true);
+  return inode_create (sector, entry_cnt * sizeof (struct dir_entry), true);
 }
 
 /* Opens and returns the directory for the given INODE, of which
@@ -86,56 +88,56 @@ get_next_part (char part[NAME_MAX + 1], const char **srcp)
 /* Resolves a path to the directory containing it, and puts the base
    file/folder name into 'basename'. For example: "/a/b/c" -> returns dir 'b'
    and basename "c". */
-struct dir *
-dir_resolve_path (const char *path, char *basename)
-{
-  struct dir *curr_dir;
-  if (path[0] == '/' || thread_current ()->cwd == NULL)
-    {
-      curr_dir = dir_open_root ();
-    }
-  else
-    {
-      curr_dir = dir_reopen (thread_current ()->cwd);
-    }
+// struct dir *
+// dir_resolve_path (const char *path, char *basename)
+// {
+//   struct dir *curr_dir;
+//   if (path[0] == '/' || thread_current ()->cwd == NULL)
+//     {
+//       curr_dir = dir_open_root ();
+//     }
+//   else
+//     {
+//       curr_dir = dir_reopen (thread_current ()->cwd);
+//     }
 
-  if (curr_dir == NULL) return NULL;
+//   if (curr_dir == NULL) return NULL;
 
-  char part[NAME_MAX + 1];
-  char next_part[NAME_MAX + 1];
-  const char *src = path;
-  struct inode *next_inode = NULL;
+//   char part[NAME_MAX + 1];
+//   char next_part[NAME_MAX + 1];
+//   const char *src = path;
+//   struct inode *next_inode = NULL;
 
-  /* Grab the first token */
-  if (get_next_part (part, &src) <= 0)
-    {
-      /* The path was just "/" or empty. */
-      strlcpy (basename, ".", NAME_MAX + 1);
-      return curr_dir;
-    }
+//   /* Grab the first token */
+//   if (get_next_part (part, &src) <= 0)
+//     {
+//       /* The path was just "/" or empty. */
+//       strlcpy (basename, ".", NAME_MAX + 1);
+//       return curr_dir;
+//     }
 
-  /* Look ahead to see if there is another token after this one */
-  while (get_next_part (next_part, &src) > 0)
-    {
-      /* 'part' is a directory we need to traverse into. */
-      if (!dir_lookup (curr_dir, part, &next_inode))
-        {
-          dir_close (curr_dir);
-          return NULL;
-        }
+//   /* Look ahead to see if there is another token after this one */
+//   while (get_next_part (next_part, &src) > 0)
+//     {
+//       /* 'part' is a directory we need to traverse into. */
+//       if (!dir_lookup (curr_dir, part, &next_inode))
+//         {
+//           dir_close (curr_dir);
+//           return NULL;
+//         }
 
-      dir_close (curr_dir);
-      curr_dir = dir_open (next_inode);
-      if (curr_dir == NULL) return NULL;
+//       dir_close (curr_dir);
+//       curr_dir = dir_open (next_inode);
+//       if (curr_dir == NULL) return NULL;
 
-      /* Shift our tokens over */
-      strlcpy (part, next_part, NAME_MAX + 1);
-    }
+//       /* Shift our tokens over */
+//       strlcpy (part, next_part, NAME_MAX + 1);
+//     }
 
-  /* 'part' is the final target base name */
-  strlcpy (basename, part, NAME_MAX + 1);
-  return curr_dir;
-}
+//   /* 'part' is the final target base name */
+//   strlcpy (basename, part, NAME_MAX + 1);
+//   return curr_dir;
+// }
 
 /* Opens the root directory and returns a directory for it.
    Return true if successful, false on failure. */
