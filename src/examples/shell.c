@@ -14,12 +14,12 @@ main (void)
     {
       char command[4096];
 
-      /* Read command. */
+      /* Read command*/
       printf ("--> ");
       read_line (command, sizeof command);
 
       /* Execute command. */
-      if (!strcmp (command, "exit"))
+      if (!strcmp (command, "exit 0"))
         break;
       else if (!memcmp (command, "cd ", 3)) 
         {
